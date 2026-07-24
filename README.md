@@ -1,7 +1,11 @@
-## Node-lua-runner
+# node-lua-runner
 
-This is a fork from [medaeus245/node-lua](https://github.com/medaeus245/node-lua) which won't get any updates anymore and was just outdated.
-Credits goes to him for the original work.
+> **Maintenance status:** This project is no longer actively maintained.
+> It remains available as a standalone continuation of `medaeus245/node-lua` for users who need LuaJIT support with newer Node.js versions.
+
+This project started as a fork of `medaeus245/node-lua`, which appeared to be unmaintained. I updated it to compile with newer Node.js versions and tested it with Windows 10 and Node.js 18+.
+
+---
 
 This Package allows you to use LUA inside Node.js.
 See [`examples`](#examples).
