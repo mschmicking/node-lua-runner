@@ -21,6 +21,15 @@ The addon is compiled at install time, so you need a working C/C++ toolchain:
 Nothing else. Earlier versions needed you to build and install LuaJIT yourself on Linux; that is
 no longer the case.
 
+> **Windows with Visual Studio 2026:** the `node-gyp` bundled with Node.js 20 and 22 cannot detect
+> that version and fails with `find VS unknown version "undefined"`. Node.js 24 is unaffected. On
+> Node 20 or 22, point npm at a current node-gyp:
+>
+> ```
+> npm install -g node-gyp@latest
+> npm config set node_gyp "%APPDATA%\npm\node_modules\node-gyp\bin\node-gyp.js"
+> ```
+
 ## Quick start
 
 ```javascript
