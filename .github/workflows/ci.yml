@@ -29,14 +29,22 @@ jobs:
       # Studio 18, which is what the windows-latest image now ships, and bails
       # with 'unknown version "undefined"'. Node 24 already carries a new enough
       # node-gyp. Point npm at a current one so every Node version can build.
-      # npm's bundled node-gyp shim defers to $npm_config_node_gyp when it is set,
-      # which is the supported override ('npm config set node_gyp' was removed in
-      # npm 11).
-      - name: Use a current node-gyp on Windows
+      # node-gyp 11.x cannot detect Visual Studio 18, which windows-latest now
+      # ships: its vswhere probe overflows the child-process stdio buffer and it
+      # reports 'unknown version "undefined"'. node-gyp 12 handles it.
+      #
+      # Pin the version rather than using @latest, which resolves per Node major
+      # via engines and still lands on 11.x for Node 20 and 22. Install it to a
+      # path we control, then point npm's bundled shim at it through
+      # $npm_config_node_gyp ('npm config set node_gyp' was removed in npm 11).
+      - name: Install a node-gyp that supports current Visual Studio
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          npm install -g node-gyp@latest
-          "npm_config_node_gyp=$(npm prefix -g)/node_modules/node-gyp/bin/node-gyp.js" >> $env:GITHUB_ENV
+          npm install --prefix "$env:RUNNER_TEMP\gyp" --no-save node-gyp@12
+          $gyp = "$env:RUNNER_TEMP\gyp\node_modules\node-gyp\bin\node-gyp.js"
+          node $gyp --version
+          "npm_config_node_gyp=$gyp" >> $env:GITHUB_ENV
 
       # Compiles the addon along with the vendored Lua and LuaFileSystem sources.
       - name: Install and build
