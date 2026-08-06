@@ -25,30 +25,18 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # The node-gyp bundled with npm on Node 20 and 22 cannot detect Visual
-      # Studio 18, which is what the windows-latest image now ships, and bails
-      # with 'unknown version "undefined"'. Node 24 already carries a new enough
-      # node-gyp. Point npm at a current one so every Node version can build.
-      # node-gyp 11.x cannot detect Visual Studio 18, which windows-latest now
-      # ships: its vswhere probe overflows the child-process stdio buffer and it
-      # reports 'unknown version "undefined"'. node-gyp 12 handles it.
-      #
-      # Pin the version rather than using @latest, which resolves per Node major
-      # via engines and still lands on 11.x for Node 20 and 22. Install it to a
-      # path we control, then point npm's bundled shim at it through
-      # $npm_config_node_gyp ('npm config set node_gyp' was removed in npm 11).
-      - name: Install a node-gyp that supports current Visual Studio
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          npm install --prefix "$env:RUNNER_TEMP\gyp" --no-save node-gyp@12
-          $gyp = "$env:RUNNER_TEMP\gyp\node_modules\node-gyp\bin\node-gyp.js"
-          node $gyp --version
-          "npm_config_node_gyp=$gyp" >> $env:GITHUB_ENV
+      - name: Install dependencies
+        run: npm install --ignore-scripts
 
-      # Compiles the addon along with the vendored Lua and LuaFileSystem sources.
-      - name: Install and build
-        run: npm install
+      # Build with an explicitly pinned node-gyp rather than the copy npm bundles.
+      # npm on Node 20 and 22 bundles node-gyp 11.x, whose Visual Studio probe
+      # overflows the child-process stdio buffer on the windows-latest image (which
+      # now ships VS 18) and then reports 'unknown version "undefined"'. There is no
+      # working override for the bundled copy -- modern npm ignores
+      # $npm_config_node_gyp -- so invoke node-gyp ourselves. node-gyp 12 handles
+      # VS 18 and supports every Node version in this matrix.
+      - name: Build the addon
+        run: npx --yes node-gyp@12 rebuild
 
       - name: Test
         run: npm test
