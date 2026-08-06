@@ -1,606 +1,672 @@
-#define BUILDING_NODELUA
-
-#include <algorithm>
 #include <string>
 
 #include "luastate.h"
-#include <nan.h>
-#include <v8.h>
 
-using v8::Function;
-using v8::Local;
-using v8::Number;
-using v8::String;
-using v8::Value;
-using Nan::HandleScope;
-using Nan::New;
-using Nan::Null;
-using Nan::To;
+// Compiled into this addon from vendor/lfs/lfs.c. Declared here rather than by
+// including lfs.h, which macro-redefines chdir/getcwd/rmdir on Windows.
+extern "C" int luaopen_lfs(lua_State* L);
 
-LuaState::LuaState() {}
-LuaState::~LuaState() {}
-
-Nan::Persistent<v8::Function> LuaState::constructor;
-
-LuaState* LuaState::instance = 0;
-LuaState* LuaState::getCurrentInstance() {
-	return LuaState::instance;
-}
-void LuaState::setCurrentInstance(LuaState* instance) {
-	LuaState::instance = instance;
+// Lua 5.1 has no luaL_requiref, so make require('lfs') resolvable by putting the
+// opener into package.preload ourselves.
+static void preload_lfs(lua_State* L) {
+	lua_getglobal(L, "package");
+	lua_getfield(L, -1, "preload");
+	lua_pushcfunction(L, luaopen_lfs);
+	lua_setfield(L, -2, "lfs");
+	lua_pop(L, 2);
 }
 
-void LuaState::Init(v8::Local<v8::Object> exports) {
+Napi::Object LuaState::Init(Napi::Env env, Napi::Object exports) {
+	Napi::Function func = DefineClass(env, "LuaState", {
+		InstanceMethod("LoadFile", &LuaState::LoadFile),
+		InstanceMethod("LoadString", &LuaState::LoadString),
 
-	v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+		InstanceMethod("AddPackagePath", &LuaState::AddPackagePath),
 
-	Nan::HandleScope scope;
+		InstanceMethod("DoFile", &LuaState::DoFile),
+		InstanceMethod("DoString", &LuaState::DoString),
 
-	// Prepare constructor template
-	v8::Local<v8::FunctionTemplate> tpl = Nan::New<v8::FunctionTemplate>(New);
-	tpl->SetClassName(Nan::New("LuaState").ToLocalChecked());
-	tpl->InstanceTemplate()->SetInternalFieldCount(1);
+		InstanceMethod("Status", &LuaState::Status),
+		InstanceMethod("CollectGarbage", &LuaState::CollectGarbage),
 
-	// Prototype
+		InstanceMethod("SetGlobal", &LuaState::SetGlobal),
+		InstanceMethod("GetGlobal", &LuaState::GetGlobal),
 
-	Nan::SetPrototypeMethod(tpl, "LoadFile", DoFileSync);
-	Nan::SetPrototypeMethod(tpl, "LoadString", DoStringSync);
+		InstanceMethod("SetField", &LuaState::SetField),
+		InstanceMethod("GetField", &LuaState::GetField),
 
-	Nan::SetPrototypeMethod(tpl, "AddPackagePath", AddPackagePath);
+		InstanceMethod("ToValue", &LuaState::ToValue),
+		InstanceMethod("Call", &LuaState::Call),
 
-	Nan::SetPrototypeMethod(tpl, "DoFile", DoFileSync);
-	Nan::SetPrototypeMethod(tpl, "DoString", DoStringSync);
+		InstanceMethod("Yield", &LuaState::Yield),
+		InstanceMethod("Resume", &LuaState::Resume),
 
-	Nan::SetPrototypeMethod(tpl, "Status", StatusSync);
-	Nan::SetPrototypeMethod(tpl, "CollectGarbage", CollectGarbageSync);
+		InstanceMethod("Close", &LuaState::Close),
 
-	Nan::SetPrototypeMethod(tpl, "SetGlobal", SetGlobal);
-	Nan::SetPrototypeMethod(tpl, "GetGlobal", GetGlobal);
+		InstanceMethod("RegisterFunction", &LuaState::RegisterFunction),
 
-	Nan::SetPrototypeMethod(tpl, "SetField", SetField);
-	Nan::SetPrototypeMethod(tpl, "GetField", GetField);
+		InstanceMethod("Push", &LuaState::Push),
+		InstanceMethod("Pop", &LuaState::Pop),
+		InstanceMethod("GetTop", &LuaState::GetTop),
+		InstanceMethod("SetTop", &LuaState::SetTop),
+		InstanceMethod("Replace", &LuaState::Replace)
+	});
 
-	Nan::SetPrototypeMethod(tpl, "ToValue", ToValue);
-	Nan::SetPrototypeMethod(tpl, "Call", Call);
-
-	Nan::SetPrototypeMethod(tpl, "Yield", LuaYield);
-	Nan::SetPrototypeMethod(tpl, "Resume", LuaResume);
-
-	Nan::SetPrototypeMethod(tpl, "Close", Close);
-
-	Nan::SetPrototypeMethod(tpl, "RegisterFunction", RegisterFunction);
-
-	Nan::SetPrototypeMethod(tpl, "Push", Push);
-	Nan::SetPrototypeMethod(tpl, "Pop", Pop);
-	Nan::SetPrototypeMethod(tpl, "GetTop", GetTop);
-	Nan::SetPrototypeMethod(tpl, "SetTop", SetTop);
-	Nan::SetPrototypeMethod(tpl, "Replace", Replace);
-
-	constructor.Reset();
-	v8::Local<v8::String> key = Nan::New("LuaState").ToLocalChecked();
-v8::Local<v8::Function> value = tpl->GetFunction(context).ToLocalChecked();
-exports->Set(context, key, value).FromJust();
-
+	exports.Set("LuaState", func);
+	return exports;
 }
 
-void LuaState::New(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if(!info.IsConstructCall()) {
-		Nan::ThrowTypeError("LuaState Requires The 'new' Operator To Create An Instance");
+LuaState::LuaState(const Napi::CallbackInfo& info)
+	: Napi::ObjectWrap<LuaState>(info), lua_(NULL), closed_(false) {
+	lua_ = luaL_newstate();
+	if(lua_ == NULL){
+		closed_ = true;
+		Napi::Error::New(info.Env(), "LuaState: Could Not Allocate A Lua State").ThrowAsJavaScriptException();
 		return;
 	}
+	luaL_openlibs(lua_);
+	preload_lfs(lua_);
+}
 
-	LuaState* obj = new LuaState();
-	obj->lua_ = lua_open();
-	luaL_openlibs(obj->lua_);
-	obj->Wrap(info.This());
+LuaState::~LuaState() {
+	if(!closed_ && lua_ != NULL){
+		lua_close(lua_);
+	}
+	lua_ = NULL;
+	closed_ = true;
+}
 
-    info.GetReturnValue().Set(info.This());
+bool LuaState::EnsureOpen(Napi::Env env) {
+	if(closed_ || lua_ == NULL){
+		Napi::Error::New(env, "LuaState Has Already Been Closed").ThrowAsJavaScriptException();
+		return false;
+	}
+	return true;
 }
 
 int LuaState::CallFunction(lua_State* L){
+	const char* func_name = lua_tostring(L, lua_upvalueindex(1));
+	LuaState* self = static_cast<LuaState*>(lua_touserdata(L, lua_upvalueindex(2)));
 
-	char *func_name = (char *)lua_tostring(L, lua_upvalueindex(1));
+	if(self == NULL || func_name == NULL){
+		return 0;
+	}
 
-	v8::Local<v8::Value> ret_val = Nan::Undefined();
+	std::map<std::string, Napi::FunctionReference>::iterator iter = self->functions.find(func_name);
+	if(iter == self->functions.end()){
+		return 0;
+	}
 
-	if (LuaState::getCurrentInstance()) {
-		LuaState *self = LuaState::getCurrentInstance();
-		lua_State *mainL = self->lua_;
-		self->lua_ = L;
+	// Lua may be running us on a coroutine thread rather than the main state.
+	// Point lua_ at it for the duration so stack operations issued by the
+	// JavaScript callback act on the stack it was actually called with.
+	lua_State* previous = self->lua_;
+	self->lua_ = L;
 
-		const unsigned argc = 0;
-		Local<Value>* argv = new Local<Value>[0];
+	Napi::Env env = iter->second.Env();
+	Napi::HandleScope scope(env);
 
-		std::map<char *, Nan::Persistent<v8::Function> >::iterator iter;
-		for(iter = self->functions.begin(); iter != self->functions.end(); iter++) {
-			if(strcmp(iter->first, func_name) == 0) {
-				v8::Local<v8::Function> func = Nan::New(iter->second);
-				ret_val = Nan::MakeCallback(Nan::GetCurrentContext()->Global(), func, argc, argv);
-				break;
-			}
+	Napi::Value ret_val = iter->second.Call({});
+
+	self->lua_ = previous;
+
+	// A JavaScript exception cannot be thrown through Lua's C frames, so leave it
+	// pending; it surfaces once control returns to JavaScript.
+	if(env.IsExceptionPending()){
+		return 0;
+	}
+
+	if(ret_val.IsNumber()){
+		return ret_val.As<Napi::Number>().Int32Value();
+	}
+	return 0;
+}
+
+Napi::Value LuaState::RegisterFunction(const Napi::CallbackInfo& info){
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 2){
+		Napi::TypeError::New(env, "LuaState.RegisterFunction Requires 2 Arguments").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.RegisterFunction Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[1].IsFunction()){
+		Napi::TypeError::New(env, "LuaState.RegisterFunction Argument 2 Must Be A Function").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string func_name = info[0].As<Napi::String>().Utf8Value();
+	functions[func_name] = Napi::Persistent(info[1].As<Napi::Function>());
+
+	// Upvalue 1 is the name we look the callback up by, upvalue 2 is the owning
+	// LuaState. Carrying the receiver on the closure keeps separate LuaState
+	// instances from clashing.
+	lua_pushstring(lua_, func_name.c_str());
+	lua_pushlightuserdata(lua_, this);
+	lua_pushcclosure(lua_, CallFunction, 2);
+	lua_setglobal(lua_, func_name.c_str());
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::AddPackagePath(const Napi::CallbackInfo& info){
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.AddPackagePath Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.AddPackagePath Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string path = info[0].As<Napi::String>().Utf8Value();
+	for(size_t i = 0; i < path.size(); ++i){
+		if(path[i] == '\\'){
+			path[i] = '/';
 		}
-
-		self->lua_ = mainL;
+	}
+	while(!path.empty() && path[path.size() - 1] == '/'){
+		path.erase(path.size() - 1);
 	}
 
-	int args = 0;
-	if (ret_val->IsNumber()) {
-		args = Nan::To<int32_t>(ret_val).FromMaybe(0);
+	// Edit package.path through the C API rather than by running generated Lua:
+	// a path containing a quote would otherwise break out of the string literal.
+	lua_getglobal(lua_, "package");
+	lua_getfield(lua_, -1, "path");
+
+	const char* current = lua_tostring(lua_, -1);
+	std::string package_path = current ? current : "";
+	lua_pop(lua_, 1);
+
+	if(!package_path.empty() && package_path[package_path.size() - 1] != ';'){
+		package_path += ";";
 	}
-	return args;
+	package_path += path + "/?.lua";
+
+	lua_pushlstring(lua_, package_path.c_str(), package_path.size());
+	lua_setfield(lua_, -2, "path");
+	lua_pop(lua_, 1);
+
+	return env.Undefined();
 }
 
-void LuaState::RegisterFunction(const Nan::FunctionCallbackInfo<v8::Value>& info){
-	Nan::HandleScope scope;
+Napi::Value LuaState::LoadFile(const Napi::CallbackInfo& info){
+	Napi::Env env = info.Env();
 
 	if(info.Length() < 1){
-		Nan::ThrowTypeError("LuaState.RegisterFunction Must Have 2 Arguments");
-        return;
+		Napi::TypeError::New(env, "LuaState.LoadFile Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	if(!info[0]->IsString()){
-		Nan::ThrowTypeError("LuaState.RegisterFunction Argument 1 Must Be A String");
-		return;
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.LoadFile Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	if(!info[1]->IsFunction()){
-		Nan::ThrowTypeError("LuaState.RegisterFunction Argument 2 Must Be A Function");
-		return;
+	if(!EnsureOpen(env)){
+		return env.Undefined();
 	}
 
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	LuaState::setCurrentInstance(obj);
-	lua_State* L = obj->lua_;
+	std::string file_name = info[0].As<Napi::String>().Utf8Value();
 
-	char* func_name = get_str(info[0]);
-	Nan::Persistent<v8::Function> func(Local<v8::Function>::Cast(info[1]));
-	obj->functions[func_name].Reset(func);
+	if(luaL_loadfile(lua_, file_name.c_str())){
+		std::string message = lua_error_message(lua_, "LuaState.LoadFile: Parsing Of File " + file_name + " Has Failed:\n");
+		lua_pop(lua_, 1);
+		Napi::Error::New(env, message).ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
 
-	lua_pushstring(L, func_name);
-	lua_pushcclosure(L, CallFunction, 1);
-	lua_setglobal(L, func_name);
-
-	LuaState::setCurrentInstance(0);
-	info.GetReturnValue().Set(Nan::Undefined());
+	return env.Undefined();
 }
 
-void LuaState::AddPackagePath(const Nan::FunctionCallbackInfo<v8::Value>& info){
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.DoFile Takes Only 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsString()) {
-		Nan::ThrowTypeError("LuaState.DoFile Argument 1 Must Be A String");
-		return;
-	}
-
-	std::string path = std::string(get_str(info[0]));
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	LuaState::setCurrentInstance(obj);
-	lua_State *L = obj->lua_;
-
-	std::replace(path.begin(), path.end(), '\\', '/');
-	if (path.back() == '/') {
-		path.pop_back();
-	}
-	std::string code = std::string("package.path = package.path .. '") + path + "/?.lua;';";
-
-	if(luaL_dostring(L, code.c_str())) {
-		char buf[1024];
-		sprintf(buf, "LuaState.AddPackagePath: Could not add package path:\n%s\n", path.c_str());
-		Nan::ThrowError(Nan::New(buf).ToLocalChecked());
-		LuaState::setCurrentInstance(0);
-		return;
-	}
-	info.GetReturnValue().Set(Nan::Undefined());
-	LuaState::setCurrentInstance(0);
-}
-
-
-void LuaState::LoadFileSync(const Nan::FunctionCallbackInfo<v8::Value>& info){
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.DoFile Takes Only 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsString()) {
-		Nan::ThrowTypeError("LuaState.DoFile Argument 1 Must Be A String");
-		return;
-	}
-
-	char* file_name = get_str(info[0]);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	LuaState::setCurrentInstance(obj);
-	lua_State* L = obj->lua_;
-
-	if (luaL_loadfile(L, file_name)) {
-		char buf[1024];
-		sprintf(buf, "LuaState.LoadFile: Parsing Of File %s Has Failed:\n%s\n", file_name, lua_tostring(L, -1));
-		Nan::ThrowError(Nan::New(buf).ToLocalChecked());
-		LuaState::setCurrentInstance(0);
-		return;
-	}
-
-	info.GetReturnValue().Set(Nan::Undefined());
-	LuaState::setCurrentInstance(0);
-}
-
-
-void LuaState::LoadStringSync(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-   Nan::HandleScope scope;
-
-   if(info.Length() < 1){
-	   Nan::ThrowTypeError("LuaState.DoString Requires 1 Argument");
-	   return;
-   }
-
-   char *lua_code = get_str(info[0]);
-   LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-   LuaState::setCurrentInstance(obj);
-   lua_State *L = obj->lua_;
-
-   if(luaL_loadstring(L, lua_code)) {
-       char buf[1024];
-       sprintf(buf, "LuaState.LoadString: Parsing Of Lua Code Has Failed:\n%s\n", lua_tostring(L, -1));
-  	   Nan::ThrowError(Nan::New(buf).ToLocalChecked());
-	   LuaState::setCurrentInstance(0);
- 	   return;
-   }
-   info.GetReturnValue().Set(Nan::Undefined());
-   LuaState::setCurrentInstance(0);
-}
-
-
-void LuaState::DoFileSync(const Nan::FunctionCallbackInfo<v8::Value>& info){
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.DoFile Takes Only 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsString()) {
-		Nan::ThrowTypeError("LuaState.DoFile Argument 1 Must Be A String");
-		return;
-	}
-
-	char* file_name = get_str(info[0]);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	LuaState::setCurrentInstance(obj);
-	lua_State* L = obj->lua_;
-
-	if (luaL_dofile(L, file_name)) {
-		char buf[1024];
-		sprintf(buf, "LuaState.DoFile: Execution Of File %s Has Failed:\n%s\n", file_name, lua_tostring(L, -1));
-		Nan::ThrowError(Nan::New(buf).ToLocalChecked());
-		LuaState::setCurrentInstance(0);
-		return;
-	}
-
-	info.GetReturnValue().Set(Nan::Undefined());
-	LuaState::setCurrentInstance(0);
-}
-
-void LuaState::DoStringSync(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-   Nan::HandleScope scope;
-
-   if(info.Length() < 1){
-	   Nan::ThrowTypeError("LuaState.DoString Requires 1 Argument");
-	   return;
-   }
-
-   char *lua_code = get_str(info[0]);
-   LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-   LuaState::setCurrentInstance(obj);
-   lua_State *L = obj->lua_;
-
-   if(luaL_dostring(L, lua_code)) {
-       char buf[1024];
-       sprintf(buf, "LuaState.DoString: Execution Of Lua Code Has Failed:\n%s\n", lua_tostring(L, -1));
-  	   Nan::ThrowError(Nan::New(buf).ToLocalChecked());
-	   LuaState::setCurrentInstance(0);
- 	   return;
-   }
-   info.GetReturnValue().Set(Nan::Undefined());
-   LuaState::setCurrentInstance(0);
-}
-
-void LuaState::SetGlobal(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.SetGlobal Requires 1 Arguments");
-		return;
-	}
-
-	if (!info[0]->IsString()) {
-		Nan::ThrowTypeError("LuaState.SetGlobal Argument 1 Must Be A String");
-		return;
-	}
-
-	char *global_name = get_str(info[0]);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-
-	lua_setglobal(obj->lua_, global_name);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::GetGlobal(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.GetGlobal Requires 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsString()) {
-		Nan::ThrowTypeError("LuaState.GetGlobal Argument 1 Must Be A String");
-		return;
-	}
-
-	char *global_name = get_str(info[0]);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_getglobal(obj->lua_, global_name);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::SetField(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 3) {
-		Nan::ThrowTypeError("LuaState.SetField Requires 3 Arguments");
-		return;
-	}
-
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.GetField Argument 1 Must Be A Number");
-		return;
-	}
-
-	if (!info[1]->IsString()) {
-		Nan::ThrowTypeError("LuaState.GetField Argument 2 Must Be A String");
-		return;
-	}
-
-	int index = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	char *field_name = get_str(info[1]);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-
-	push_value_to_lua(obj->lua_, info[1]);
-	lua_setfield(obj->lua_, index, field_name);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::GetField(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 2) {
-		Nan::ThrowTypeError("LuaState.GetField Requires 2 Argument");
-		return;
-	}
-
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.GetField Argument 1 Must Be A Number");
-		return;
-	}
-
-	if (!info[1]->IsString()) {
-		Nan::ThrowTypeError("LuaState.GetField Argument 2 Must Be A String");
-		return;
-	}
-
-	int index = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	char *field_name = get_str(info[1]);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_getfield(obj->lua_, index, field_name);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::ToValue(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.ToValue Requires 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.ToValue Argument 1 Must Be A Number");
-		return;
-	}
-
-	int index = Nan::To<int32_t>(info[0]).FromMaybe(0);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	Local<Value> val = lua_to_value(obj->lua_, index);
-	info.GetReturnValue().Set(val);
-}
-
-void LuaState::Call(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 2) {
-		Nan::ThrowTypeError("LuaState.Call Requires 2 Argument");
-		return;
-	}
-
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.Call Argument 1 Must Be A Number");
-		return;
-	}
-
-	if (!info[1]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.Call Argument 2 Must Be A Number");
-		return;
-	}
-
-
-	int args = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	int results = Nan::To<int32_t>(info[1]).FromMaybe(0);
-
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	LuaState::setCurrentInstance(obj);
-	lua_State *L = obj->lua_;
-
-	if(lua_pcall(L, args, results, 0)) {
-		char buf[1024];
-		sprintf(buf, "LuaState.Call: Execution Of Lua Function Has Failed:\n%s\n", lua_tostring(L, -1));
-		Nan::ThrowError(Nan::New(buf).ToLocalChecked());
-		LuaState::setCurrentInstance(0);
-		return;
-	}
-	LuaState::setCurrentInstance(0);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::LuaYield(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.Yield Requires 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.Yield Argument 1 Must Be A Number");
-		return;
-	}
-
-	int args = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_yield(obj->lua_, args);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::LuaResume(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
-
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.Resume Requires 1 Argument");
-		return;
-	}
-
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.Resume Argument 1 Must Be A Number");
-		return;
-	}
-
-	int args = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_resume(obj->lua_, args);
-	info.GetReturnValue().Set(Nan::Undefined());
-}
-
-
-void LuaState::Close(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-   Nan::HandleScope scope;
-   LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-   lua_close(obj->lua_);
-   info.GetReturnValue().Set(Nan::Undefined());
-}
-
-void LuaState::StatusSync(const Nan::FunctionCallbackInfo<v8::Value>& info){
-	Nan::HandleScope scope;
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	int status = lua_status(obj->lua_);
-	info.GetReturnValue().Set(Nan::New(status));
-}
-
-void LuaState::CollectGarbageSync(const Nan::FunctionCallbackInfo<v8::Value>& info){
-	Nan::HandleScope scope;
+Napi::Value LuaState::LoadString(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
 
 	if(info.Length() < 1){
-		Nan::ThrowTypeError("LuaState.CollectGarbage Requires 1 Argument");
-		return;
+		Napi::TypeError::New(env, "LuaState.LoadString Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	if(!info[0]->IsNumber()){
-		Nan::ThrowTypeError("LuaState.CollectGarbage Argument 1 Must Be A Number, try nodelua.GC.[TYPE]");
-		return;
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.LoadString Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	int type = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	int gc = lua_gc(obj->lua_, type, 0);
-	info.GetReturnValue().Set(Nan::New(gc));
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string lua_code = info[0].As<Napi::String>().Utf8Value();
+
+	if(luaL_loadstring(lua_, lua_code.c_str())){
+		std::string message = lua_error_message(lua_, "LuaState.LoadString: Parsing Of Lua Code Has Failed:\n");
+		lua_pop(lua_, 1);
+		Napi::Error::New(env, message).ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	return env.Undefined();
 }
 
-void LuaState::Push(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
+Napi::Value LuaState::DoFile(const Napi::CallbackInfo& info){
+	Napi::Env env = info.Env();
 
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.Push Requires 1 Argument");
-		return;
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.DoFile Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	push_value_to_lua(obj->lua_, info[0]);
-	info.GetReturnValue().Set(Nan::Undefined());
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.DoFile Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string file_name = info[0].As<Napi::String>().Utf8Value();
+
+	if(luaL_dofile(lua_, file_name.c_str())){
+		std::string message = lua_error_message(lua_, "LuaState.DoFile: Execution Of File " + file_name + " Has Failed:\n");
+		lua_pop(lua_, 1);
+		Napi::Error::New(env, message).ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	return env.Undefined();
 }
 
-void LuaState::Pop(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
+Napi::Value LuaState::DoString(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.DoString Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.DoString Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string lua_code = info[0].As<Napi::String>().Utf8Value();
+
+	if(luaL_dostring(lua_, lua_code.c_str())){
+		std::string message = lua_error_message(lua_, "LuaState.DoString: Execution Of Lua Code Has Failed:\n");
+		lua_pop(lua_, 1);
+		Napi::Error::New(env, message).ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::SetGlobal(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.SetGlobal Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.SetGlobal Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string global_name = info[0].As<Napi::String>().Utf8Value();
+	lua_setglobal(lua_, global_name.c_str());
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::GetGlobal(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.GetGlobal Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsString()){
+		Napi::TypeError::New(env, "LuaState.GetGlobal Argument 1 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	std::string global_name = info[0].As<Napi::String>().Utf8Value();
+	lua_getglobal(lua_, global_name.c_str());
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::SetField(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 3){
+		Napi::TypeError::New(env, "LuaState.SetField Requires 3 Arguments").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.SetField Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[1].IsString()){
+		Napi::TypeError::New(env, "LuaState.SetField Argument 2 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	// Resolve the index before pushing: pushing the value shifts every relative
+	// index by one, which would otherwise leave us assigning into the value itself.
+	int index = abs_index(lua_, info[0].As<Napi::Number>().Int32Value());
+	std::string field_name = info[1].As<Napi::String>().Utf8Value();
+
+	// Indexing a non-table raises an unprotected Lua error, which aborts the whole
+	// process rather than throwing. Reject it here instead.
+	if(!lua_istable(lua_, index) && lua_type(lua_, index) != LUA_TUSERDATA){
+		Napi::TypeError::New(env, "LuaState.SetField: Value At The Given Index Is Not A Table").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	// Push the value, not the key: lua_setfield takes the key as a C string and
+	// pops the value from the top of the stack.
+	push_value_to_lua(lua_, info[2]);
+	lua_setfield(lua_, index, field_name.c_str());
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::GetField(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 2){
+		Napi::TypeError::New(env, "LuaState.GetField Requires 2 Arguments").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.GetField Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[1].IsString()){
+		Napi::TypeError::New(env, "LuaState.GetField Argument 2 Must Be A String").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int index = abs_index(lua_, info[0].As<Napi::Number>().Int32Value());
+	std::string field_name = info[1].As<Napi::String>().Utf8Value();
+
+	// Indexing a non-table raises an unprotected Lua error, which aborts the whole
+	// process rather than throwing. Reject it here instead.
+	if(!lua_istable(lua_, index) && lua_type(lua_, index) != LUA_TUSERDATA){
+		Napi::TypeError::New(env, "LuaState.GetField: Value At The Given Index Is Not A Table").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	lua_getfield(lua_, index, field_name.c_str());
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::ToValue(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.ToValue Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.ToValue Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int index = info[0].As<Napi::Number>().Int32Value();
+	return lua_to_value(env, lua_, index);
+}
+
+Napi::Value LuaState::Call(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 2){
+		Napi::TypeError::New(env, "LuaState.Call Requires 2 Arguments").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.Call Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[1].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.Call Argument 2 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int args = info[0].As<Napi::Number>().Int32Value();
+	int results = info[1].As<Napi::Number>().Int32Value();
+
+	if(lua_pcall(lua_, args, results, 0)){
+		std::string message = lua_error_message(lua_, "LuaState.Call: Execution Of Lua Function Has Failed:\n");
+		lua_pop(lua_, 1);
+		Napi::Error::New(env, message).ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::Yield(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.Yield Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.Yield Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int args = info[0].As<Napi::Number>().Int32Value();
+	lua_yield(lua_, args);
+
+	return env.Undefined();
+}
+
+Napi::Value LuaState::Resume(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.Resume Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.Resume Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int args = info[0].As<Napi::Number>().Int32Value();
+	int status = lua_resume(lua_, args);
+
+	return Napi::Number::New(env, status);
+}
+
+Napi::Value LuaState::Close(const Napi::CallbackInfo& info) {
+	if(!closed_ && lua_ != NULL){
+		lua_close(lua_);
+		lua_ = NULL;
+		closed_ = true;
+		functions.clear();
+	}
+	return info.Env().Undefined();
+}
+
+Napi::Value LuaState::Status(const Napi::CallbackInfo& info){
+	Napi::Env env = info.Env();
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	return Napi::Number::New(env, lua_status(lua_));
+}
+
+Napi::Value LuaState::CollectGarbage(const Napi::CallbackInfo& info){
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.CollectGarbage Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.CollectGarbage Argument 1 Must Be A Number, try nodelua.GC.[TYPE]").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int type = info[0].As<Napi::Number>().Int32Value();
+	return Napi::Number::New(env, lua_gc(lua_, type, 0));
+}
+
+Napi::Value LuaState::Push(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.Push Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
+	}
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	push_value_to_lua(lua_, info[0]);
+	return env.Undefined();
+}
+
+Napi::Value LuaState::Pop(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
 
 	int pop_n = 1;
-	if (info.Length() > 0 && info[0]->IsNumber()) {
-		pop_n = Nan::To<int32_t>(info[0]).FromMaybe(1);
+	if(info.Length() > 0 && info[0].IsNumber()){
+		pop_n = info[0].As<Napi::Number>().Int32Value();
 	}
 
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_pop(obj->lua_, pop_n);
-	info.GetReturnValue().Set(Nan::Undefined());
+	lua_pop(lua_, pop_n);
+	return env.Undefined();
 }
 
-void LuaState::GetTop(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
+Napi::Value LuaState::GetTop(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
 
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	int n = lua_gettop(obj->lua_);
-	info.GetReturnValue().Set(Nan::New(n));
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	return Napi::Number::New(env, lua_gettop(lua_));
 }
 
-void LuaState::SetTop(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
+Napi::Value LuaState::SetTop(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
+
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
 
 	int set_n = 0;
-	if(info.Length() > 0 && info[0]->IsNumber()){
-		set_n = Nan::To<int32_t>(info[0]).FromMaybe(0);
+	if(info.Length() > 0 && info[0].IsNumber()){
+		set_n = info[0].As<Napi::Number>().Int32Value();
 	}
 
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_settop(obj->lua_, set_n);
-	info.GetReturnValue().Set(Nan::Undefined());
+	lua_settop(lua_, set_n);
+	return env.Undefined();
 }
 
-void LuaState::Replace(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-	Nan::HandleScope scope;
+Napi::Value LuaState::Replace(const Napi::CallbackInfo& info) {
+	Napi::Env env = info.Env();
 
-	if (info.Length() < 1) {
-		Nan::ThrowTypeError("LuaState.Replace Requires 1 Argument");
-		return;
+	if(info.Length() < 1){
+		Napi::TypeError::New(env, "LuaState.Replace Requires 1 Argument").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	if (!info[0]->IsNumber()) {
-		Nan::ThrowTypeError("LuaState.Replace Argument 1 Must Be A Number");
-		return;
+	if(!info[0].IsNumber()){
+		Napi::TypeError::New(env, "LuaState.Replace Argument 1 Must Be A Number").ThrowAsJavaScriptException();
+		return env.Undefined();
 	}
 
-	int index = Nan::To<int32_t>(info[0]).FromMaybe(0);
-	LuaState* obj = ObjectWrap::Unwrap<LuaState>(info.This());
-	lua_replace(obj->lua_, index);
-	info.GetReturnValue().Set(Nan::Undefined());
+	if(!EnsureOpen(env)){
+		return env.Undefined();
+	}
+
+	int index = info[0].As<Napi::Number>().Int32Value();
+	lua_replace(lua_, index);
+
+	return env.Undefined();
 }

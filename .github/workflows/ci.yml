@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64, which is exactly the configuration that could not
+        # build before Lua was vendored.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Compiles the addon along with the vendored Lua and LuaFileSystem sources.
+      - name: Install and build
+        run: npm install
+
+      - name: Test
+        run: npm test
+
+      - name: Check the published tarball contents
+        run: npm pack --dry-run

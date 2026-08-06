@@ -1,81 +1,70 @@
-#include <stdlib.h>
 #include "utils.h"
-#include <nan.h>
 
-char* get_str(v8::Local<v8::Value> val) {
-  if (!val->IsString()) {
-    Nan::ThrowError("Argument Must Be A String");
-    return NULL;
-  }
-
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  v8::Local<v8::Context> context = isolate->GetCurrentContext();
-  v8::Local<v8::String> val_string = val->ToString(context).ToLocalChecked();
-  v8::String::Utf8Value val_utf8(isolate, val_string);
-  char* val_char_ptr = (char*)malloc(val_utf8.length() + 1);
-  strcpy(val_char_ptr, *val_utf8);
-  return val_char_ptr;
+int abs_index(lua_State* L, int index) {
+	if(index > 0 || index <= LUA_REGISTRYINDEX){
+		return index;
+	}
+	return lua_gettop(L) + index + 1;
 }
 
+Napi::Value lua_to_value(Napi::Env env, lua_State* L, int index) {
+	switch(lua_type(L, index)){
+	case LUA_TBOOLEAN:
+		return Napi::Boolean::New(env, lua_toboolean(L, index) != 0);
+	case LUA_TNUMBER:
+		return Napi::Number::New(env, lua_tonumber(L, index));
+	case LUA_TSTRING:
+		return Napi::String::New(env, lua_tostring(L, index));
+	case LUA_TTABLE:
+		{
+			// lua_next pushes a key and a value, so a relative index would drift
+			// as we iterate. Resolve it to an absolute one up front.
+			int table = abs_index(L, index);
 
-
-
-v8::Local<v8::Value> lua_to_value(lua_State* L, int i){
- switch(lua_type(L, i)){
- case LUA_TBOOLEAN:
-	 return Nan::New((int)lua_toboolean(L, i));
-   break;
- case LUA_TNUMBER:
-	 return Nan::New(lua_tonumber(L, i));
-   break;
- case LUA_TSTRING:
-	 return Nan::New((char *)lua_tostring(L, i)).ToLocalChecked();
-   break;
- case LUA_TTABLE:
-   {
-     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
-     lua_pushnil(L);
-     while(lua_next(L, -2) != 0){
-	v8::Local<v8::Value> key = lua_to_value(L, -2);
-	v8::Local<v8::Value> value = lua_to_value(L, -1);
-Nan::Set(obj, key, value);
-	lua_pop(L, 1);
-     }
-     return obj;
-     break;
-   }
- default:
-	 return Nan::Undefined();
-   break;
- }
+			Napi::Object obj = Napi::Object::New(env);
+			lua_pushnil(L);
+			while(lua_next(L, table) != 0){
+				Napi::Value key = lua_to_value(env, L, -2);
+				Napi::Value value = lua_to_value(env, L, -1);
+				obj.Set(key, value);
+				lua_pop(L, 1);
+			}
+			return obj;
+		}
+	default:
+		return env.Undefined();
+	}
 }
 
-void push_value_to_lua(lua_State* L, v8::Local<v8::Value> value){
-  v8::Isolate* isolate = v8::Isolate::GetCurrent(); 
- v8::Local<v8::Context> context = isolate->GetCurrentContext();
-	if (value->IsString()){  v8::Local<v8::String> str = value->ToString(context).ToLocalChecked();
-lua_pushstring(L, get_str(str));
- }else if(value->IsNumber()){
-   int i_value = Nan::To<int32_t>(value).FromMaybe(0);
-   lua_pushinteger(L, i_value);
- }else if(value->IsBoolean()){
-   int b_value = (int)value->ToBoolean(isolate)->Value();
-   lua_pushboolean(L, b_value);
- }else if(value->IsObject()){
-   lua_newtable(L);
-   v8::Local<v8::Object> obj = value->ToObject(context).ToLocalChecked();
+void push_value_to_lua(lua_State* L, Napi::Value value){
+	if(value.IsString()){
+		// Push with an explicit length: Lua strings may contain embedded NULs.
+		std::string str = value.As<Napi::String>().Utf8Value();
+		lua_pushlstring(L, str.c_str(), str.size());
+	}else if(value.IsNumber()){
+		lua_pushnumber(L, value.As<Napi::Number>().DoubleValue());
+	}else if(value.IsBoolean()){
+		lua_pushboolean(L, value.As<Napi::Boolean>().Value() ? 1 : 0);
+	}else if(value.IsObject()){
+		Napi::Object obj = value.As<Napi::Object>();
 
-  v8::Local<v8::Array> keys = obj->GetPropertyNames(context).ToLocalChecked();
+		Napi::Array keys = obj.GetPropertyNames();
 
-   for(uint32_t i = 0; i < keys->Length(); ++i){
-     v8::Local<v8::Value> key = keys->Get(context, i).ToLocalChecked();
+		lua_newtable(L);
+		for(uint32_t i = 0; i < keys.Length(); ++i){
+			Napi::Value key = keys.Get(i);
+			Napi::Value val = obj.Get(key);
 
-     v8::Local<v8::Value> val = obj->Get(context, key).ToLocalChecked();
-     push_value_to_lua(L, key);
-     push_value_to_lua(L, val);
-     lua_settable(L, -3);
-   }
- }else{
-   lua_pushnil(L);
- }
+			push_value_to_lua(L, key);
+			push_value_to_lua(L, val);
+			lua_settable(L, -3);
+		}
+	}else{
+		lua_pushnil(L);
+	}
+}
+
+std::string lua_error_message(lua_State* L, const std::string& prefix){
+	const char* message = lua_tostring(L, -1);
+	return prefix + (message ? message : "unknown error");
 }
