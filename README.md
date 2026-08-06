@@ -27,7 +27,8 @@ no longer the case.
 >
 > ```
 > npm install -g node-gyp@latest
-> npm config set node_gyp "%APPDATA%\npm\node_modules\node-gyp\bin\node-gyp.js"
+> set npm_config_node_gyp=%APPDATA%\npm\node_modules\node-gyp\bin\node-gyp.js
+> npm install node-lua-runner
 > ```
 
 ## Quick start
