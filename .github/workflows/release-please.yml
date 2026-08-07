@@ -10,6 +10,10 @@ name: Release PR
 on:
   push:
     branches: [master]
+  # Lets a run be forced without pushing. Useful because release-please is silent by
+  # design when there is nothing to release — dispatching it and reading the log is
+  # the only way to tell "working, nothing to do" apart from "misconfigured".
+  workflow_dispatch:
 
 permissions:
   contents: write
