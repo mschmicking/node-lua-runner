@@ -28,7 +28,8 @@
   ],
   "scripts": {
     "install": "node-gyp rebuild",
-    "test": "node --test"
+    "test": "node --test",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "node-addon-api": "^8.9.1"

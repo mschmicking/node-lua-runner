@@ -334,6 +334,20 @@ npm install
 npm test
 ```
 
+### Releasing
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/); the pull request
+title is what matters, since it becomes the squashed commit message.
+
+release-please keeps an open `chore(master): release x.y.z` pull request that accumulates merged
+changes, works out the next version and rewrites `CHANGELOG.md`. Merging that pull request tags the
+commit and publishes a GitHub Release, which is what triggers the npm publish. So merging the
+release pull request is the single deliberate act that ships a version — nothing publishes on an
+ordinary merge to `master`.
+
+Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) over OIDC, so
+there is no npm token stored in this repository.
+
 ## License
 
 ISC — see [LICENSE.md](LICENSE.md), which also covers the vendored Lua and LuaFileSystem sources.

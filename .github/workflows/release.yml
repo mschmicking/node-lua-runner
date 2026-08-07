@@ -1,0 +1,127 @@
+name: Release to npm
+
+# Fires when release-please publishes a GitHub Release — that only happens when a
+# release pull request is merged, which is itself a deliberate act with the version
+# and changelog visible for review. So merging the release PR is the single action
+# that ships a version.
+#
+# Still dispatchable by hand, defaulting to a dry run, for re-publishing after a
+# failure or validating the tarball without shipping.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack and validate without publishing'
+        type: boolean
+        default: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for OIDC — this is what npm exchanges for a short-lived publish
+      # credential, and what provenance is derived from. Only works on a public
+      # repository.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # 24 rather than 22: trusted publishing needs npm >= 11.5.1, and Node 22
+          # still ships npm 10.x.
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Ensure an npm new enough for trusted publishing
+        run: |
+          npm install -g npm@^11
+          npm --version
+
+      # Also compiles the addon, since the install script runs node-gyp. Ubuntu is
+      # unaffected by the Visual Studio detection problem that forces ci.yml to pin
+      # its own node-gyp on Windows.
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Refuse to publish a version that already exists
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Preparing $NAME@$VERSION"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::$NAME@$VERSION is already published. Bump the version first."
+            exit 1
+          fi
+
+      # This package builds from source on the user's machine, so the vendored Lua
+      # and LuaFileSystem sources are not an optional extra — a tarball missing them
+      # is unbuildable for everyone who installs it, and npm versions are immutable.
+      # Cheapest possible check against the most expensive possible mistake.
+      - name: Verify the tarball can actually build
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            // npm 11 and earlier emit an array of results; npm 12 emits an object
+            // keyed by package name. Accept either, so an npm upgrade cannot turn
+            // this guard into a crash — or, worse, into a silent pass.
+            const raw = require('./pack.json');
+            const entry = Array.isArray(raw) ? raw[0] : Object.values(raw)[0];
+            if (!entry || !Array.isArray(entry.files)) {
+              console.error('could not read the file list from npm pack --json');
+              process.exit(1);
+            }
+            const files = entry.files.map(f => f.path);
+
+            const needed = ['index.js', 'binding.gyp', 'src/luastate.cc', 'src/nodelua.cc', 'src/utils.cc', 'vendor/lfs/lfs.c', 'README.md', 'LICENSE.md'];
+            const missing = needed.filter(n => !files.includes(n));
+            if (missing.length) {
+              console.error('missing from tarball:', missing.join(', '));
+              process.exit(1);
+            }
+
+            // Lua 5.1.5 is 29 translation units; a partial copy links with undefined
+            // symbols rather than failing loudly at pack time.
+            const lua = files.filter(f => /^vendor\/lua\/.+\.c\$/.test(f));
+            if (lua.length !== 29) {
+              console.error('expected 29 vendored Lua sources, found ' + lua.length);
+              process.exit(1);
+            }
+
+            // Build output is platform-specific and must never ship; node_modules
+            // would bloat the tarball and shadow the consumer's own tree.
+            const leaked = files.filter(f => /^(build|node_modules|test|examples)\//.test(f));
+            if (leaked.length) {
+              console.error('unexpected files in tarball:', leaked.join(', '));
+              process.exit(1);
+            }
+
+            console.log(files.length + ' files, all expected');
+          "
+
+      - name: Pack (dry run)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: npm publish --dry-run
+
+      # No NODE_AUTH_TOKEN. Publishing uses npm trusted publishing (OIDC): npm
+      # verifies this workflow's identity against the trusted publisher configured on
+      # the package, so there is no long-lived token to leak or rotate.
+      #
+      # Provenance is automatic under OIDC for a public package from a public repo,
+      # so --provenance is not passed explicitly.
+      # On a release event inputs.dry_run is undefined, so this must not rely on
+      # negating it — an undefined input would otherwise read as "not a dry run" by
+      # luck rather than intent.
+      - name: Publish
+        if: ${{ github.event_name == 'release' || !inputs.dry_run }}
+        run: npm publish --access public
+
+      # No tagging step: release-please already created the tag and the GitHub
+      # Release that triggered this run.

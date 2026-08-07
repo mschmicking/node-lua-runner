@@ -1,0 +1,78 @@
+name: CodeQL
+
+# GitHub's own static analysis. Free on public repositories; on a private repo it
+# requires GitHub Advanced Security, so this will simply not run until the
+# repository is public.
+#
+# Worth more here than on a pure JavaScript project: src/ is C++ driving a raw C API
+# with hand-managed stack indices, string buffers and object lifetimes, which is
+# exactly what the c-cpp queries are built to find.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Lets the first scan be triggered without waiting for a push, and lets a rerun be
+  # forced after a rule update.
+  workflow_dispatch:
+  schedule:
+    # Rules are updated continuously, so a weekly run finds things that did not exist
+    # as findings when the code was written.
+    - cron: '0 7 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    # Skip rather than fail while the repository is private: code scanning needs
+    # GitHub Advanced Security there, and a permanently red workflow trains people to
+    # ignore red workflows.
+    if: ${{ !github.event.repository.private }}
+    permissions:
+      security-events: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The addon has to be compiled for CodeQL to observe it, so the build runs
+          # between init and analyze below.
+          - language: c-cpp
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4.37.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended adds lower-severity rules, worth it for code that does
+          # its own memory and stack bookkeeping.
+          queries: security-extended
+          # NOTE: path filters are not honoured for compiled languages, so alerts in
+          # vendor/ will still appear for c-cpp. Dismiss those as "used in tests" or
+          # "won't fix": Lua 5.1.5 and LuaFileSystem are vendored verbatim and are not
+          # patched here, so a finding in them is upstream's, not ours. The filter is
+          # kept because it does apply to the javascript-typescript run.
+          config: |
+            paths-ignore:
+              - vendor/**
+
+      - uses: actions/setup-node@v7
+        if: matrix.build-mode == 'manual'
+        with:
+          node-version: 24
+
+      - name: Build the addon
+        if: matrix.build-mode == 'manual'
+        run: |
+          npm install --ignore-scripts
+          npx --yes node-gyp@12 rebuild
+
+      - uses: github/codeql-action/analyze@v4.37.3
+        with:
+          category: /language:${{ matrix.language }}
