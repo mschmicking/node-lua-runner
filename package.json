@@ -28,7 +28,7 @@
     "vendor/",
     "README.md",
     "LICENSE",
-    "LICENSE.md"
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
     "install": "node-gyp rebuild",

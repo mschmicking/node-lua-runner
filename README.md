@@ -350,4 +350,5 @@ there is no npm token stored in this repository.
 
 ## License
 
-ISC — see [LICENSE.md](LICENSE.md), which also covers the vendored Lua and LuaFileSystem sources.
+ISC — see [LICENSE](LICENSE). The vendored Lua and LuaFileSystem sources are MIT; their
+notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
