@@ -2,11 +2,11 @@
 #define LUASTATE_H
 
 #include <map>
-#include <node.h>
+#include <string>
+
+#include <napi.h>
 
 #include "utils.h"
-#include <nan.h>
-#include <v8.h>
 
 extern "C" {
 	#include <lua.h>
@@ -14,58 +14,59 @@ extern "C" {
 	#include <lualib.h>
 }
 
-class LuaState : public Nan::ObjectWrap {
-private:
-	static Nan::Persistent<v8::Function> constructor;
-	static LuaState* instance;
-
-	std::map<char*, Nan::Persistent<v8::Function> > functions;
-	lua_State* lua_;
-
+class LuaState : public Napi::ObjectWrap<LuaState> {
 public:
-	static void Init(v8::Local<v8::Object> exports);
-	static int CallFunction(lua_State* L);
+	static Napi::Object Init(Napi::Env env, Napi::Object exports);
 
-	static LuaState* getCurrentInstance();
-	static void setCurrentInstance(LuaState*);
-
- private:
-	LuaState();
+	LuaState(const Napi::CallbackInfo& info);
 	~LuaState();
 
-	static void New(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void Close(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	// Trampoline invoked by Lua for every function registered from JavaScript.
+	static int CallFunction(lua_State* L);
 
-	static void CollectGarbageSync(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void StatusSync(const Nan::FunctionCallbackInfo<v8::Value>& info);
+private:
+	// Functions registered from JS, keyed by their Lua global name.
+	std::map<std::string, Napi::FunctionReference> functions;
 
-	static void AddPackagePath(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	lua_State* lua_;
+	bool closed_;
 
-	static void LoadFileSync(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void LoadStringSync(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	// Throws and returns false if the state has already been closed, so that
+	// calling into a closed LuaState raises instead of dereferencing freed memory.
+	bool EnsureOpen(Napi::Env env);
 
-	static void DoFileSync(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void DoStringSync(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value Close(const Napi::CallbackInfo& info);
 
-	static void SetGlobal(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void GetGlobal(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value CollectGarbage(const Napi::CallbackInfo& info);
+	Napi::Value Status(const Napi::CallbackInfo& info);
 
-	static void SetField(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void GetField(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value AddPackagePath(const Napi::CallbackInfo& info);
 
-	static void ToValue(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void Call(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value LoadFile(const Napi::CallbackInfo& info);
+	Napi::Value LoadString(const Napi::CallbackInfo& info);
 
-	static void LuaYield(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void LuaResume(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value DoFile(const Napi::CallbackInfo& info);
+	Napi::Value DoString(const Napi::CallbackInfo& info);
 
-	static void RegisterFunction(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value SetGlobal(const Napi::CallbackInfo& info);
+	Napi::Value GetGlobal(const Napi::CallbackInfo& info);
 
-	static void Push(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void Pop(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void GetTop(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void SetTop(const Nan::FunctionCallbackInfo<v8::Value>& info);
-	static void Replace(const Nan::FunctionCallbackInfo<v8::Value>& info);
+	Napi::Value SetField(const Napi::CallbackInfo& info);
+	Napi::Value GetField(const Napi::CallbackInfo& info);
+
+	Napi::Value ToValue(const Napi::CallbackInfo& info);
+	Napi::Value Call(const Napi::CallbackInfo& info);
+
+	Napi::Value Yield(const Napi::CallbackInfo& info);
+	Napi::Value Resume(const Napi::CallbackInfo& info);
+
+	Napi::Value RegisterFunction(const Napi::CallbackInfo& info);
+
+	Napi::Value Push(const Napi::CallbackInfo& info);
+	Napi::Value Pop(const Napi::CallbackInfo& info);
+	Napi::Value GetTop(const Napi::CallbackInfo& info);
+	Napi::Value SetTop(const Napi::CallbackInfo& info);
+	Napi::Value Replace(const Napi::CallbackInfo& info);
 };
 
 #endif

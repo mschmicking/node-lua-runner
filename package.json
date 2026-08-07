@@ -1,7 +1,7 @@
 {
   "name": "node-lua-runner",
-  "version": "1.1.1",
-  "description": "Lua Bindings For NodeJS",
+  "version": "2.0.0",
+  "description": "Embed Lua 5.1 in Node.js. Lua and LuaFileSystem are compiled into the addon, so there is nothing to install on the system.",
   "author": "medaeus245, 0x7878",
   "main": "index.js",
   "keywords": [
@@ -9,18 +9,40 @@
     "lua5.1",
     "node-lua",
     "node-lua-binding",
-    "nodejs"
+    "nodejs",
+    "native",
+    "addon",
+    "bindings",
+    "node-api",
+    "napi",
+    "embed",
+    "scripting"
+  ],
+  "files": [
+    "index.js",
+    "binding.gyp",
+    "src/",
+    "vendor/",
+    "README.md",
+    "LICENSE.md"
   ],
   "scripts": {
-    "install": "node-gyp rebuild"
+    "install": "node-gyp rebuild",
+    "test": "node --test"
   },
   "dependencies": {
-    "nan": "^2.6.2"
+    "node-addon-api": "^8.9.1"
   },
-  "homepage": "https://github.com/0x7878/node-lua-runner#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "homepage": "https://github.com/mschmicking/node-lua-runner#readme",
   "repository": {
     "type": "git",
-    "url": "git@github.com:0x7878/node-lua-runner"
+    "url": "git+https://github.com/mschmicking/node-lua-runner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mschmicking/node-lua-runner/issues"
   },
   "license": "ISC",
   "gypfile": true

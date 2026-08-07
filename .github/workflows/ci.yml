@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64, which is exactly the configuration that could not
+        # build before Lua was vendored.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      # Build with an explicitly pinned node-gyp rather than the copy npm bundles.
+      # npm on Node 20 and 22 bundles node-gyp 11.x, whose Visual Studio probe
+      # overflows the child-process stdio buffer on the windows-latest image (which
+      # now ships VS 18) and then reports 'unknown version "undefined"'. There is no
+      # working override for the bundled copy -- modern npm ignores
+      # $npm_config_node_gyp -- so invoke node-gyp ourselves. node-gyp 12 handles
+      # VS 18 and supports every Node version in this matrix.
+      - name: Build the addon
+        run: npx --yes node-gyp@12 rebuild
+
+      - name: Test
+        run: npm test
+
+      - name: Check the published tarball contents
+        run: npm pack --dry-run
