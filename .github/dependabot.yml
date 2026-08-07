@@ -1,0 +1,61 @@
+version: 2
+
+# NOTE: this file only takes effect once it is on the default branch (master).
+#
+# Titles matter here. pr-title.yml requires Conventional Commits, and Dependabot's
+# default title ("Bump x from 1 to 2") has no type, so every Dependabot pull request
+# would fail that check and become unmergeable. The commit-message settings below
+# produce "chore(deps): bump x from 1 to 2" instead — 'chore' is an allowed type and
+# 'deps' an allowed scope in pr-title.yml. Keep the two files in step.
+#
+# The vendored Lua and LuaFileSystem sources under vendor/ are deliberately not
+# covered: Dependabot has no ecosystem for copied-in C source, and Lua 5.1.5 is
+# frozen upstream. Updating those stays a manual, deliberate act.
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      # Adds the (deps) / (deps-dev) scope, giving "chore(deps): ...".
+      include: scope
+    groups:
+      # One pull request a week for the routine bumps, so the noise stays low on a
+      # package with a single runtime dependency. Majors are deliberately excluded:
+      # node-addon-api is the C++ binding layer, and a major there can break
+      # compilation on some platforms and not others, which deserves its own pull
+      # request and its own CI matrix run to look at.
+      npm-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Action bumps are almost always safe and arrive in batches; grouping them
+      # keeps five separate workflow files from producing five separate pull
+      # requests for the same version bump.
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
