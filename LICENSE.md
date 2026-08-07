@@ -5,7 +5,10 @@ This project is ISC licensed. The canonical licence text lives in [LICENSE](LICE
 this file repeats it and adds the notices for the third-party sources compiled into
 the addon.
 
-#### The ISC Licence (ISC) Copyright (c) 2017, Medaeus245, 0x7878
+#### The ISC Licence (ISC)
+
+Copyright (c) 2017, Medaeus245
+Copyright (c) 2023, Maurice Schmicking (previously credited as 0x7878)
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above

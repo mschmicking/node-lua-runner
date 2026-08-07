@@ -2,7 +2,10 @@
   "name": "node-lua-runner",
   "version": "2.0.0",
   "description": "Embed Lua 5.1 in Node.js. Lua and LuaFileSystem are compiled into the addon, so there is nothing to install on the system.",
-  "author": "medaeus245, 0x7878",
+  "author": "Maurice Schmicking",
+  "contributors": [
+    "Medaeus245"
+  ],
   "main": "index.js",
   "keywords": [
     "lua",
