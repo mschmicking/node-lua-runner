@@ -80,7 +80,7 @@ jobs:
             }
             const files = entry.files.map(f => f.path);
 
-            const needed = ['index.js', 'binding.gyp', 'src/luastate.cc', 'src/nodelua.cc', 'src/utils.cc', 'vendor/lfs/lfs.c', 'README.md', 'LICENSE.md'];
+            const needed = ['index.js', 'binding.gyp', 'src/luastate.cc', 'src/nodelua.cc', 'src/utils.cc', 'vendor/lfs/lfs.c', 'README.md', 'LICENSE', 'LICENSE.md'];
             const missing = needed.filter(n => !files.includes(n));
             if (missing.length) {
               console.error('missing from tarball:', missing.join(', '));

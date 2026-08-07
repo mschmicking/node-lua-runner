@@ -24,6 +24,7 @@
     "src/",
     "vendor/",
     "README.md",
+    "LICENSE",
     "LICENSE.md"
   ],
   "scripts": {
