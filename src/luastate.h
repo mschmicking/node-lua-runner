@@ -35,6 +35,10 @@ private:
 	// calling into a closed LuaState raises instead of dereferencing freed memory.
 	bool EnsureOpen(Napi::Env env);
 
+	// Throws and returns false if the value at `index` cannot be indexed, which
+	// would otherwise raise an unprotected Lua error and abort the process.
+	bool EnsureIndexable(Napi::Env env, int index, const char* method);
+
 	Napi::Value Close(const Napi::CallbackInfo& info);
 
 	Napi::Value CollectGarbage(const Napi::CallbackInfo& info);

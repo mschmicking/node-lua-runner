@@ -84,6 +84,18 @@ bool LuaState::EnsureOpen(Napi::Env env) {
 	return true;
 }
 
+// Indexing a non-table raises an unprotected Lua error, which aborts the whole
+// process rather than throwing. Reject it here instead.
+bool LuaState::EnsureIndexable(Napi::Env env, int index, const char* method) {
+	if(!lua_istable(lua_, index) && lua_type(lua_, index) != LUA_TUSERDATA){
+		std::string message = std::string("LuaState.") + method +
+			": Value At The Given Index Is Not A Table";
+		Napi::TypeError::New(env, message).ThrowAsJavaScriptException();
+		return false;
+	}
+	return true;
+}
+
 int LuaState::CallFunction(lua_State* L){
 	const char* func_name = lua_tostring(L, lua_upvalueindex(1));
 	LuaState* self = static_cast<LuaState*>(lua_touserdata(L, lua_upvalueindex(2)));
@@ -124,23 +136,7 @@ int LuaState::CallFunction(lua_State* L){
 
 Napi::Value LuaState::RegisterFunction(const Napi::CallbackInfo& info){
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 2){
-		Napi::TypeError::New(env, "LuaState.RegisterFunction Requires 2 Arguments").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.RegisterFunction Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[1].IsFunction()){
-		Napi::TypeError::New(env, "LuaState.RegisterFunction Argument 2 Must Be A Function").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "RegisterFunction", {Arg::String, Arg::Function}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -160,18 +156,7 @@ Napi::Value LuaState::RegisterFunction(const Napi::CallbackInfo& info){
 
 Napi::Value LuaState::AddPackagePath(const Napi::CallbackInfo& info){
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.AddPackagePath Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.AddPackagePath Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "AddPackagePath", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -208,28 +193,13 @@ Napi::Value LuaState::AddPackagePath(const Napi::CallbackInfo& info){
 
 Napi::Value LuaState::LoadFile(const Napi::CallbackInfo& info){
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.LoadFile Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.LoadFile Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "LoadFile", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
 	std::string file_name = info[0].As<Napi::String>().Utf8Value();
-
 	if(luaL_loadfile(lua_, file_name.c_str())){
-		std::string message = lua_error_message(lua_, "LuaState.LoadFile: Parsing Of File " + file_name + " Has Failed:\n");
-		lua_pop(lua_, 1);
-		Napi::Error::New(env, message).ThrowAsJavaScriptException();
-		return env.Undefined();
+		ThrowLuaError(env, lua_, "LuaState.LoadFile: Parsing Of File " + file_name + " Has Failed:\n");
 	}
 
 	return env.Undefined();
@@ -237,28 +207,13 @@ Napi::Value LuaState::LoadFile(const Napi::CallbackInfo& info){
 
 Napi::Value LuaState::LoadString(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.LoadString Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.LoadString Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "LoadString", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
 	std::string lua_code = info[0].As<Napi::String>().Utf8Value();
-
 	if(luaL_loadstring(lua_, lua_code.c_str())){
-		std::string message = lua_error_message(lua_, "LuaState.LoadString: Parsing Of Lua Code Has Failed:\n");
-		lua_pop(lua_, 1);
-		Napi::Error::New(env, message).ThrowAsJavaScriptException();
-		return env.Undefined();
+		ThrowLuaError(env, lua_, "LuaState.LoadString: Parsing Of Lua Code Has Failed:\n");
 	}
 
 	return env.Undefined();
@@ -266,28 +221,13 @@ Napi::Value LuaState::LoadString(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::DoFile(const Napi::CallbackInfo& info){
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.DoFile Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.DoFile Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "DoFile", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
 	std::string file_name = info[0].As<Napi::String>().Utf8Value();
-
 	if(luaL_dofile(lua_, file_name.c_str())){
-		std::string message = lua_error_message(lua_, "LuaState.DoFile: Execution Of File " + file_name + " Has Failed:\n");
-		lua_pop(lua_, 1);
-		Napi::Error::New(env, message).ThrowAsJavaScriptException();
-		return env.Undefined();
+		ThrowLuaError(env, lua_, "LuaState.DoFile: Execution Of File " + file_name + " Has Failed:\n");
 	}
 
 	return env.Undefined();
@@ -295,28 +235,13 @@ Napi::Value LuaState::DoFile(const Napi::CallbackInfo& info){
 
 Napi::Value LuaState::DoString(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.DoString Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.DoString Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "DoString", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
 	std::string lua_code = info[0].As<Napi::String>().Utf8Value();
-
 	if(luaL_dostring(lua_, lua_code.c_str())){
-		std::string message = lua_error_message(lua_, "LuaState.DoString: Execution Of Lua Code Has Failed:\n");
-		lua_pop(lua_, 1);
-		Napi::Error::New(env, message).ThrowAsJavaScriptException();
-		return env.Undefined();
+		ThrowLuaError(env, lua_, "LuaState.DoString: Execution Of Lua Code Has Failed:\n");
 	}
 
 	return env.Undefined();
@@ -324,18 +249,7 @@ Napi::Value LuaState::DoString(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::SetGlobal(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.SetGlobal Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.SetGlobal Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "SetGlobal", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -347,18 +261,7 @@ Napi::Value LuaState::SetGlobal(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::GetGlobal(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.GetGlobal Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsString()){
-		Napi::TypeError::New(env, "LuaState.GetGlobal Argument 1 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "GetGlobal", {Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -370,37 +273,18 @@ Napi::Value LuaState::GetGlobal(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::SetField(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 3){
-		Napi::TypeError::New(env, "LuaState.SetField Requires 3 Arguments").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.SetField Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[1].IsString()){
-		Napi::TypeError::New(env, "LuaState.SetField Argument 2 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "SetField", {Arg::Number, Arg::String, Arg::Any}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
 	// Resolve the index before pushing: pushing the value shifts every relative
 	// index by one, which would otherwise leave us assigning into the value itself.
 	int index = abs_index(lua_, info[0].As<Napi::Number>().Int32Value());
-	std::string field_name = info[1].As<Napi::String>().Utf8Value();
-
-	// Indexing a non-table raises an unprotected Lua error, which aborts the whole
-	// process rather than throwing. Reject it here instead.
-	if(!lua_istable(lua_, index) && lua_type(lua_, index) != LUA_TUSERDATA){
-		Napi::TypeError::New(env, "LuaState.SetField: Value At The Given Index Is Not A Table").ThrowAsJavaScriptException();
+	if(!EnsureIndexable(env, index, "SetField")){
 		return env.Undefined();
 	}
+
+	std::string field_name = info[1].As<Napi::String>().Utf8Value();
 
 	// Push the value, not the key: lua_setfield takes the key as a C string and
 	// pops the value from the top of the stack.
@@ -412,36 +296,16 @@ Napi::Value LuaState::SetField(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::GetField(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 2){
-		Napi::TypeError::New(env, "LuaState.GetField Requires 2 Arguments").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.GetField Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[1].IsString()){
-		Napi::TypeError::New(env, "LuaState.GetField Argument 2 Must Be A String").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "GetField", {Arg::Number, Arg::String}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
 	int index = abs_index(lua_, info[0].As<Napi::Number>().Int32Value());
-	std::string field_name = info[1].As<Napi::String>().Utf8Value();
-
-	// Indexing a non-table raises an unprotected Lua error, which aborts the whole
-	// process rather than throwing. Reject it here instead.
-	if(!lua_istable(lua_, index) && lua_type(lua_, index) != LUA_TUSERDATA){
-		Napi::TypeError::New(env, "LuaState.GetField: Value At The Given Index Is Not A Table").ThrowAsJavaScriptException();
+	if(!EnsureIndexable(env, index, "GetField")){
 		return env.Undefined();
 	}
 
+	std::string field_name = info[1].As<Napi::String>().Utf8Value();
 	lua_getfield(lua_, index, field_name.c_str());
 
 	return env.Undefined();
@@ -449,44 +313,16 @@ Napi::Value LuaState::GetField(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::ToValue(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.ToValue Requires 1 Argument").ThrowAsJavaScriptException();
+	if(!CheckArgs(info, "ToValue", {Arg::Number}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.ToValue Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
-		return env.Undefined();
-	}
-
-	int index = info[0].As<Napi::Number>().Int32Value();
-	return lua_to_value(env, lua_, index);
+	return lua_to_value(env, lua_, info[0].As<Napi::Number>().Int32Value());
 }
 
 Napi::Value LuaState::Call(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 2){
-		Napi::TypeError::New(env, "LuaState.Call Requires 2 Arguments").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.Call Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[1].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.Call Argument 2 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "Call", {Arg::Number, Arg::Number}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -494,10 +330,7 @@ Napi::Value LuaState::Call(const Napi::CallbackInfo& info) {
 	int results = info[1].As<Napi::Number>().Int32Value();
 
 	if(lua_pcall(lua_, args, results, 0)){
-		std::string message = lua_error_message(lua_, "LuaState.Call: Execution Of Lua Function Has Failed:\n");
-		lua_pop(lua_, 1);
-		Napi::Error::New(env, message).ThrowAsJavaScriptException();
-		return env.Undefined();
+		ThrowLuaError(env, lua_, "LuaState.Call: Execution Of Lua Function Has Failed:\n");
 	}
 
 	return env.Undefined();
@@ -505,47 +338,21 @@ Napi::Value LuaState::Call(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::Yield(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.Yield Requires 1 Argument").ThrowAsJavaScriptException();
+	if(!CheckArgs(info, "Yield", {Arg::Number}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.Yield Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
-		return env.Undefined();
-	}
-
-	int args = info[0].As<Napi::Number>().Int32Value();
-	lua_yield(lua_, args);
-
+	lua_yield(lua_, info[0].As<Napi::Number>().Int32Value());
 	return env.Undefined();
 }
 
 Napi::Value LuaState::Resume(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.Resume Requires 1 Argument").ThrowAsJavaScriptException();
+	if(!CheckArgs(info, "Resume", {Arg::Number}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.Resume Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
-		return env.Undefined();
-	}
-
-	int args = info[0].As<Napi::Number>().Int32Value();
-	int status = lua_resume(lua_, args);
-
+	int status = lua_resume(lua_, info[0].As<Napi::Number>().Int32Value());
 	return Napi::Number::New(env, status);
 }
 
@@ -561,7 +368,6 @@ Napi::Value LuaState::Close(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::Status(const Napi::CallbackInfo& info){
 	Napi::Env env = info.Env();
-
 	if(!EnsureOpen(env)){
 		return env.Undefined();
 	}
@@ -571,18 +377,7 @@ Napi::Value LuaState::Status(const Napi::CallbackInfo& info){
 
 Napi::Value LuaState::CollectGarbage(const Napi::CallbackInfo& info){
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.CollectGarbage Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.CollectGarbage Argument 1 Must Be A Number, try nodelua.GC.[TYPE]").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "CollectGarbage", {Arg::Number}, ", try nodelua.GC.[TYPE]") || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -592,13 +387,7 @@ Napi::Value LuaState::CollectGarbage(const Napi::CallbackInfo& info){
 
 Napi::Value LuaState::Push(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.Push Requires 1 Argument").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
+	if(!CheckArgs(info, "Push", {Arg::Any}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
@@ -608,11 +397,11 @@ Napi::Value LuaState::Push(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::Pop(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
 	if(!EnsureOpen(env)){
 		return env.Undefined();
 	}
 
+	// The count is optional and defaults to 1, so this cannot use CheckArgs.
 	int pop_n = 1;
 	if(info.Length() > 0 && info[0].IsNumber()){
 		pop_n = info[0].As<Napi::Number>().Int32Value();
@@ -624,7 +413,6 @@ Napi::Value LuaState::Pop(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::GetTop(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
 	if(!EnsureOpen(env)){
 		return env.Undefined();
 	}
@@ -634,11 +422,11 @@ Napi::Value LuaState::GetTop(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::SetTop(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
 	if(!EnsureOpen(env)){
 		return env.Undefined();
 	}
 
+	// The index is optional and defaults to 0, so this cannot use CheckArgs.
 	int set_n = 0;
 	if(info.Length() > 0 && info[0].IsNumber()){
 		set_n = info[0].As<Napi::Number>().Int32Value();
@@ -650,23 +438,10 @@ Napi::Value LuaState::SetTop(const Napi::CallbackInfo& info) {
 
 Napi::Value LuaState::Replace(const Napi::CallbackInfo& info) {
 	Napi::Env env = info.Env();
-
-	if(info.Length() < 1){
-		Napi::TypeError::New(env, "LuaState.Replace Requires 1 Argument").ThrowAsJavaScriptException();
+	if(!CheckArgs(info, "Replace", {Arg::Number}) || !EnsureOpen(env)){
 		return env.Undefined();
 	}
 
-	if(!info[0].IsNumber()){
-		Napi::TypeError::New(env, "LuaState.Replace Argument 1 Must Be A Number").ThrowAsJavaScriptException();
-		return env.Undefined();
-	}
-
-	if(!EnsureOpen(env)){
-		return env.Undefined();
-	}
-
-	int index = info[0].As<Napi::Number>().Int32Value();
-	lua_replace(lua_, index);
-
+	lua_replace(lua_, info[0].As<Napi::Number>().Int32Value());
 	return env.Undefined();
 }

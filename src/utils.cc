@@ -1,5 +1,63 @@
 #include "utils.h"
 
+namespace {
+
+const char* ArgTypeName(Arg kind){
+	switch(kind){
+	case Arg::Number:   return "A Number";
+	case Arg::String:   return "A String";
+	case Arg::Function: return "A Function";
+	default:            return "A Value";
+	}
+}
+
+bool ArgMatches(Napi::Value value, Arg kind){
+	switch(kind){
+	case Arg::Number:   return value.IsNumber();
+	case Arg::String:   return value.IsString();
+	case Arg::Function: return value.IsFunction();
+	default:            return true;
+	}
+}
+
+}  // namespace
+
+bool CheckArgs(const Napi::CallbackInfo& info, const char* method,
+	std::initializer_list<Arg> expected, const char* hint){
+	Napi::Env env = info.Env();
+	const size_t required = expected.size();
+
+	if(info.Length() < required){
+		std::string message = std::string("LuaState.") + method + " Requires " +
+			std::to_string(required) + (required == 1 ? " Argument" : " Arguments");
+		Napi::TypeError::New(env, message).ThrowAsJavaScriptException();
+		return false;
+	}
+
+	size_t i = 0;
+	for(Arg kind : expected){
+		if(!ArgMatches(info[i], kind)){
+			std::string message = std::string("LuaState.") + method + " Argument " +
+				std::to_string(i + 1) + " Must Be " + ArgTypeName(kind);
+			if(hint != NULL){
+				message += hint;
+			}
+			Napi::TypeError::New(env, message).ThrowAsJavaScriptException();
+			return false;
+		}
+		++i;
+	}
+
+	return true;
+}
+
+void ThrowLuaError(Napi::Env env, lua_State* L, const std::string& prefix){
+	const char* message = lua_tostring(L, -1);
+	std::string full = prefix + (message ? message : "unknown error");
+	lua_pop(L, 1);
+	Napi::Error::New(env, full).ThrowAsJavaScriptException();
+}
+
 int abs_index(lua_State* L, int index) {
 	if(index > 0 || index <= LUA_REGISTRYINDEX){
 		return index;
@@ -62,9 +120,4 @@ void push_value_to_lua(lua_State* L, Napi::Value value){
 	}else{
 		lua_pushnil(L);
 	}
-}
-
-std::string lua_error_message(lua_State* L, const std::string& prefix){
-	const char* message = lua_tostring(L, -1);
-	return prefix + (message ? message : "unknown error");
 }
