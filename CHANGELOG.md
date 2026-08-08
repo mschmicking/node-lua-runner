@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/mschmicking/node-lua-runner/compare/v2.0.0...v2.0.1) (2026-08-08)
+
+
+### Changed
+
+* collapse repeated argument guards into CheckArgs ([#9](https://github.com/mschmicking/node-lua-runner/issues/9)) ([4def99b](https://github.com/mschmicking/node-lua-runner/commit/4def99b54e1da506bdb32123d4a8859ffca92327))
+
 ## [2.0.0](https://github.com/mschmicking/node-lua-runner/releases/tag/v2.0.0)
 
 Maintenance release that makes the package build and run on current Node.js.
