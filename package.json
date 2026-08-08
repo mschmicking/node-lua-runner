@@ -1,7 +1,7 @@
 {
   "name": "node-lua-runner",
   "version": "2.0.1",
-  "description": "Embed Lua 5.1 in Node.js. Lua and LuaFileSystem are compiled into the addon, so there is nothing to install on the system.",
+  "description": "Real Lua 5.1 in Node.js, for tooling that must interoperate with a Lua 5.1 runtime. A Node-API native addon with the genuine Lua 5.1.5 interpreter and LuaFileSystem compiled in.",
   "author": "Maurice Schmicking",
   "contributors": [
     "Medaeus245"
@@ -19,7 +19,10 @@
     "node-api",
     "napi",
     "embed",
-    "scripting"
+    "scripting",
+    "lua51",
+    "embedded",
+    "interop"
   ],
   "files": [
     "index.js",
